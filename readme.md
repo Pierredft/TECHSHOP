@@ -43,4 +43,21 @@ rate(http_requests_total[5m])
 ## Résultat
 - Les résultat sont normaux et corrects
 
-# 
+# Modification des commandes de test prometheus
+## Vérifier les métriques de l'application
+`up`
+
+## Taux de requêtes HTTP par seconde
+`rate(http_requests_total[5m])`
+
+## Utilisation CPU des conteneurs
+`rate(container_cpu_usage_seconds_total{id=~"/docker/.*"}[5m]) * 100`
+
+## Mémoire disponible sur le système
+`container_memory_usage_bytes{id=~"/docker/.*"} / 1024 / 1024`
+
+## Nombre d'utilisateurs actifs (métrique custom)
+`business_active_users`
+
+## P95 latence des requêtes
+`histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))`
