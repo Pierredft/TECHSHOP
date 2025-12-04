@@ -1,0 +1,270 @@
+version: '3.8'
+
+services:
+  # Bases de données
+  postgres:
+    image: postgres:15-alpine
+    container_name: techshop-db
+    environment:
+      POSTGRES_DB: techshop
+      POSTGRES_USER: techshop
+      POSTGRES_PASSWORD: techshop123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - techshop
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: techshop-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - techshop
+    restart: unless-stopped
+
+  # Services Backend (simulés avec Node.js simple)
+  product-service:
+    image: node:18-alpine
+    container_name: product-service
+    working_dir: /app
+    volumes:
+      - ./services/product:/app
+    command: sh -c "npm install && node server.js"
+    ports:
+      - "8001:8001"
+    environment:
+      SERVICE_NAME: product-service
+      SERVICE_PORT: 8001
+      DB_HOST: postgres
+      REDIS_HOST: redis
+    networks:
+      - techshop
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  order-service:
+    image: node:18-alpine
+    container_name: order-service
+    working_dir: /app
+    volumes:
+      - ./services/order:/app
+    command: sh -c "npm install && node server.js"
+    ports:
+      - "8002:8002"
+    environment:
+      SERVICE_NAME: order-service
+      SERVICE_PORT: 8002
+      DB_HOST: postgres
+      REDIS_HOST: redis
+    networks:
+      - techshop
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  payment-service:
+    image: node:18-alpine
+    container_name: payment-service
+    working_dir: /app
+    volumes:
+      - ./services/payment:/app
+    command: sh -c "npm install && node server.js"
+    ports:
+      - "8003:8003"
+    environment:
+      SERVICE_NAME: payment-service
+      SERVICE_PORT: 8003
+      REDIS_HOST: redis
+    networks:
+      - techshop
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  user-service:
+    image: node:18-alpine
+    container_name: user-service
+    working_dir: /app
+    volumes:
+      - ./services/user:/app
+    command: sh -c "npm install && node server.js"
+    ports:
+      - "8004:8004"
+    environment:
+      SERVICE_NAME: user-service
+      SERVICE_PORT: 8004
+      DB_HOST: postgres
+      REDIS_HOST: redis
+    networks:
+      - techshop
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  # Monitoring Stack
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    networks:
+      - techshop
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+    networks:
+      - techshop
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki:/etc/loki
+      - loki-data:/loki
+    command: -config.file=/etc/loki/loki-config.yml
+    networks:
+      - techshop
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./monitoring/promtail:/etc/promtail
+    command: -config.file=/etc/promtail/promtail-config.yml
+    networks:
+      - techshop
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager:/etc/alertmanager
+      - alertmanager-data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+    networks:
+      - techshop
+    restart: unless-stopped
+
+  # Exporters
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://techshop:techshop123@postgres:5432/techshop?sslmode=disable"
+    ports:
+      - "9187:9187"
+    networks:
+      - techshop
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: redis-exporter
+    environment:
+      REDIS_ADDR: "redis:6379"
+    ports:
+      - "9121:9121"
+    networks:
+      - techshop
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - monitoring
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    ports:
+      - "9100:9100"
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - techshop
+    restart: unless-stopped
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    networks:
+      - techshop
+    restart: unless-stopped
+
+networks:
+  techshop:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+  alertmanager-data:
